@@ -74,15 +74,16 @@ impl GenericSocket for TcpStream {}
 
 pub trait PacketAssembler: Send + Sync {
     fn is_oversized(&self, len: usize) -> bool;
-    fn assemble(&self, data: &mut Vec<u8>) -> Result<(), Error>;
-    fn load(&self, buf: &mut BytesMut) -> Option<BytesMut>;
+    fn assemble(&mut self, data: Vec<u8>) -> Result<Vec<u8>, Error>;
+    fn load(&mut self, buf: &mut BytesMut) -> Result<Option<BytesMut>, Error>;
 }
 
 /// Packet with guard to automatically update throttling and high priority
 /// packets counter.
-#[derive(Default)]
 struct Packet {
-    data: Vec<u8>,
+    // Cannot move out data field due to Drop implementation of Packet.
+    // So, wrap with Option to modify the data internally.
+    data: Option<Vec<u8>>,
     sending_pos: usize,
     is_high_priority: bool,
     throttling_size: usize,
@@ -99,7 +100,7 @@ impl Packet {
         }
 
         Ok(Packet {
-            data,
+            data: Some(data),
             sending_pos: 0,
             is_high_priority,
             throttling_size,
@@ -114,16 +115,30 @@ impl Packet {
     }
 
     fn write(&mut self, writer: &mut dyn Write) -> Result<usize, Error> {
-        if self.is_send_completed() {
-            return Ok(0);
-        }
+        let buf = match self.data {
+            Some(ref data) if self.sending_pos < data.len() => {
+                &data[self.sending_pos..]
+            }
+            _ => return Ok(0),
+        };
 
-        let size = writer.write(&self.data[self.sending_pos..])?;
+        let size = writer.write(buf)?;
         self.sending_pos += size;
         Ok(size)
     }
 
-    fn is_send_completed(&self) -> bool { self.sending_pos >= self.data.len() }
+    fn len(&self) -> usize { self.data.as_ref().map_or(0, |data| data.len()) }
+
+    fn is_send_completed(&self) -> bool { self.sending_pos >= self.len() }
+
+    fn assemble(
+        &mut self, assembler: &mut dyn PacketAssembler,
+    ) -> Result<(), Error> {
+        let data = self.data.take().expect("data should not be None");
+        let data = assembler.assemble(data)?;
+        self.data.replace(data);
+        Ok(())
+    }
 }
 
 impl Drop for Packet {
@@ -156,7 +171,7 @@ pub struct GenericConnection<Socket: GenericSocket> {
 }
 
 impl<Socket: GenericSocket> GenericConnection<Socket> {
-    pub fn readable(&mut self) -> io::Result<Option<Bytes>> {
+    pub fn readable(&mut self) -> Result<Option<Bytes>, Error> {
         let mut buf: [u8; 1024] = [0; 1024];
         loop {
             match self.socket.read(&mut buf) {
@@ -175,14 +190,14 @@ impl<Socket: GenericSocket> GenericConnection<Socket> {
                 Err(e) => {
                     if e.kind() != io::ErrorKind::WouldBlock {
                         debug!("Failed to read socket data, token = {}, err = {:?}", self.token, e);
-                        return Err(e);
+                        return Err(e.into());
                     }
                     break;
                 }
             }
         }
 
-        let packet = self.assembler.load(&mut self.recv_buf);
+        let packet = self.assembler.load(&mut self.recv_buf)?;
 
         if let Some(ref p) = packet {
             trace!(
@@ -195,9 +210,7 @@ impl<Socket: GenericSocket> GenericConnection<Socket> {
         Ok(packet.map(|p| p.freeze()))
     }
 
-    pub fn write_raw_data(
-        &mut self, mut data: Vec<u8>,
-    ) -> Result<usize, Error> {
+    pub fn write_raw_data(&mut self, data: Vec<u8>) -> Result<usize, Error> {
         trace!(
             "Sending raw buffer, token = {} data_len = {}, data = {:?}",
             self.token,
@@ -205,7 +218,7 @@ impl<Socket: GenericSocket> GenericConnection<Socket> {
             data
         );
 
-        self.assembler.assemble(&mut data)?;
+        let data = self.assembler.assemble(data)?;
         let size = self.socket.write(&data)?;
 
         trace!(
@@ -243,12 +256,12 @@ impl<Socket: GenericSocket> GenericConnection<Socket> {
             }
 
             // assemble packet to send, e.g. prefix length to packet
-            self.assembler.assemble(&mut packet.data)?;
+            packet.assemble(self.assembler.as_mut())?;
 
             trace!(
                 "Packet ready for sent, token = {}, size = {}",
                 self.token,
-                packet.data.len()
+                packet.len()
             );
 
             self.sending_packet = Some(packet);
@@ -425,7 +438,7 @@ impl Connection {
             sending_buf: self
                 .sending_packet
                 .as_ref()
-                .map_or(0, |p| p.data.len() - p.sending_pos),
+                .map_or(0, |p| p.len() - p.sending_pos),
             priority_queue_normal: self
                 .send_queue
                 .len_by_priority(SendQueuePriority::Normal),
@@ -480,7 +493,7 @@ impl PacketAssembler for PacketWithLenAssembler {
     #[inline]
     fn is_oversized(&self, len: usize) -> bool { len > self.max_data_len }
 
-    fn assemble(&self, data: &mut Vec<u8>) -> Result<(), Error> {
+    fn assemble(&mut self, mut data: Vec<u8>) -> Result<Vec<u8>, Error> {
         if self.is_oversized(data.len()) {
             return Err(ErrorKind::OversizedPacket.into());
         }
@@ -501,12 +514,12 @@ impl PacketAssembler for PacketWithLenAssembler {
         let start = data.len() - swapped.len();
         data[start..].copy_from_slice(&swapped);
 
-        Ok(())
+        Ok(data)
     }
 
-    fn load(&self, buf: &mut BytesMut) -> Option<BytesMut> {
+    fn load(&mut self, buf: &mut BytesMut) -> Result<Option<BytesMut>, Error> {
         if buf.len() < self.data_len_bytes {
-            return None;
+            return Ok(None);
         }
 
         // parse data length from first n-bytes
@@ -519,7 +532,7 @@ impl PacketAssembler for PacketWithLenAssembler {
 
         // some data not received yet
         if buf.len() < self.data_len_bytes + data_size {
-            return None;
+            return Ok(None);
         }
 
         let mut packet = buf.split_to(self.data_len_bytes + data_size);
@@ -533,7 +546,7 @@ impl PacketAssembler for PacketWithLenAssembler {
             packet.split_to(self.data_len_bytes);
         };
 
-        Some(packet)
+        Ok(Some(packet))
     }
 }
 
@@ -661,7 +674,7 @@ mod tests {
         assert_eq!(0, connection.send_queue.len());
 
         let sending_packet = connection.sending_packet.unwrap();
-        assert_eq!(sending_packet.data.len(), 61);
+        assert_eq!(sending_packet.len(), 61);
         assert_eq!(sending_packet.sending_pos, 10);
     }
 
@@ -669,8 +682,7 @@ mod tests {
     fn connection_read() {
         let mut connection = TestConnection::new();
 
-        let mut data = vec![1, 3, 5, 7];
-        connection.assembler.assemble(&mut data).unwrap();
+        let data = connection.assembler.assemble(vec![1, 3, 5, 7]).unwrap();
 
         connection.socket.read_buf = data[..2].to_vec();
         {
@@ -724,46 +736,60 @@ mod tests {
 
     #[test]
     fn test_assembler_assemble() {
-        let assembler = PacketWithLenAssembler::default();
+        let mut assembler = PacketWithLenAssembler::default();
 
         // data length > 3
-        let mut data = vec![1, 2, 3, 4, 5];
-        assembler.assemble(&mut data).unwrap();
-        assert_eq!(data, vec![5, 0, 0, 4, 5, 1, 2, 3]);
+        assert_eq!(
+            assembler.assemble(vec![1, 2, 3, 4, 5]).unwrap(),
+            vec![5, 0, 0, 4, 5, 1, 2, 3]
+        );
 
         // data length == 3
-        let mut data = vec![1, 2, 3];
-        assembler.assemble(&mut data).unwrap();
-        assert_eq!(data, vec![3, 0, 0, 1, 2, 3]);
+        assert_eq!(
+            assembler.assemble(vec![1, 2, 3]).unwrap(),
+            vec![3, 0, 0, 1, 2, 3]
+        );
 
         // data length < 3
-        let mut data = vec![1, 2];
-        assembler.assemble(&mut data).unwrap();
-        assert_eq!(data, vec![2, 0, 0, 1, 2]);
+        assert_eq!(
+            assembler.assemble(vec![1, 2]).unwrap(),
+            vec![2, 0, 0, 1, 2]
+        );
     }
 
     #[test]
     fn test_assembler_load() {
-        let assembler = PacketWithLenAssembler::default();
+        let mut assembler = PacketWithLenAssembler::default();
 
         // packet not ready
-        assert_eq!(assembler.load(&mut vec![5].into()), None);
-        assert_eq!(assembler.load(&mut vec![5, 0, 0].into()), None);
-        assert_eq!(assembler.load(&mut vec![5, 0, 0, 4, 5, 1, 2].into()), None);
+        assert_eq!(assembler.load(&mut vec![5].into()).unwrap(), None);
+        assert_eq!(assembler.load(&mut vec![5, 0, 0].into()).unwrap(), None);
+        assert_eq!(
+            assembler
+                .load(&mut vec![5, 0, 0, 4, 5, 1, 2].into())
+                .unwrap(),
+            None
+        );
 
         // packet ready and length > 3
         let mut buf = vec![5, 0, 0, 4, 5, 1, 2, 3].into();
-        assert_eq!(&assembler.load(&mut buf).unwrap()[..], &[1, 2, 3, 4, 5]);
+        assert_eq!(
+            &assembler.load(&mut buf).unwrap().unwrap()[..],
+            &[1, 2, 3, 4, 5]
+        );
         assert_eq!(buf.is_empty(), true);
 
         // packet ready and length < 3
         let mut buf = vec![2, 0, 0, 1, 2].into();
-        assert_eq!(&assembler.load(&mut buf).unwrap()[..], &[1, 2]);
+        assert_eq!(&assembler.load(&mut buf).unwrap().unwrap()[..], &[1, 2]);
         assert_eq!(buf.is_empty(), true);
 
         // packet ready with some data of the next packet
         let mut buf = vec![5, 0, 0, 4, 5, 1, 2, 3, 6, 7].into();
-        assert_eq!(&assembler.load(&mut buf).unwrap()[..], &[1, 2, 3, 4, 5]);
+        assert_eq!(
+            &assembler.load(&mut buf).unwrap().unwrap()[..],
+            &[1, 2, 3, 4, 5]
+        );
         assert_eq!(&buf[..], &[6, 7]);
     }
 }

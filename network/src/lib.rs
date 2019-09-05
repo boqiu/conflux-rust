@@ -38,6 +38,7 @@ pub type HandlerWorkType = u8;
 pub type PeerId = usize;
 
 mod connection;
+mod connection_rlpx;
 mod discovery;
 mod error;
 mod handshake;
