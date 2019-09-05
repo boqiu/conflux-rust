@@ -4,6 +4,7 @@
 
 use crate::{
     connection::{Connection, ConnectionDetails, SendQueueStatus, WriteStatus},
+    connection_rlpx::EncryptedPacketAssembler,
     handshake::Handshake,
     node_table::{NodeEndpoint, NodeEntry, NodeId},
     service::NetworkServiceInner,
@@ -39,6 +40,7 @@ pub struct Session {
 enum State {
     Handshake(MovableWrapper<Handshake>),
     Session(Connection),
+    EncryptedSession(Connection),
 }
 
 pub enum SessionData {
@@ -107,6 +109,7 @@ impl Session {
         match self.state {
             State::Handshake(ref h) => &h.get().connection,
             State::Session(ref c) => c,
+            State::EncryptedSession(ref c) => c,
         }
     }
 
@@ -114,6 +117,7 @@ impl Session {
         match self.state {
             State::Handshake(ref mut h) => &mut h.get_mut().connection,
             State::Session(ref mut c) => c,
+            State::EncryptedSession(ref mut c) => c,
         }
     }
 
@@ -151,7 +155,7 @@ impl Session {
     where Message: Send + Sync + Clone {
         let wrapper = match self.state {
             State::Handshake(ref mut h) => h,
-            State::Session(_) => panic!("Unexpected session state"),
+            _ => panic!("Unexpected session state"),
         };
 
         // update node id for ingress session
@@ -166,8 +170,23 @@ impl Session {
             self.metadata.id = Some(id);
         }
 
+        // change session state
+        if wrapper.get().remote_ephemeral.is_zero() {
+            // used in test only
+            self.state = State::Session(wrapper.take().connection);
+            trace!("session state changed to State::Session");
+        } else {
+            let assembler = EncryptedPacketAssembler::new(wrapper.get())?;
+
+            let mut handshake = wrapper.take();
+            handshake.connection.assembler = Box::new(assembler);
+
+            self.state = State::EncryptedSession(handshake.connection);
+
+            trace!("session state changed to State::EncryptedSession");
+        }
+
         // write HELLO packet to remote peer
-        self.state = State::Session(wrapper.take().connection);
         self.write_hello(io, host)?;
 
         Ok(())
@@ -188,14 +207,12 @@ impl Session {
                 let h = h.get_mut();
                 h.readable(io, &host.metadata)?;
                 if h.done() {
+                    // ACK packet received for egress session
                     self.complete_handshake(io, host)?;
-                    io.update_registration(self.token()).unwrap_or_else(|e| {
-                        debug!("Token registration error: {:?}", e)
-                    });
                 }
                 Ok(SessionData::None)
             }
-            State::Session(ref mut c) => match c.readable()? {
+            _ => match self.connection_mut().readable()? {
                 Some(data) => Ok(self.read_packet(io, data, host)?),
                 None => Ok(SessionData::None),
             },
@@ -456,23 +473,23 @@ impl Session {
     }
 
     pub fn writable<Message: Send + Sync + Clone>(
-        &mut self, io: &IoContext<Message>,
+        &mut self, io: &IoContext<Message>, host: &NetworkServiceInner,
     ) -> Result<(), Error> {
-        let result = match self.state {
-            State::Handshake(ref mut h) => h.get_mut().writable(io),
-            State::Session(ref mut s) => s.writable(io),
+        let status = match self.state {
+            State::Handshake(ref mut h) => {
+                let status = h.get_mut().writable(io)?;
+                if h.get().done() {
+                    // ACK packet sent for ingress session
+                    self.complete_handshake(io, host)?;
+                }
+                status
+            }
+            State::Session(ref mut c) => c.writable(io)?,
+            State::EncryptedSession(ref mut c) => c.writable(io)?,
         };
 
-        match result {
-            Ok(status) => {
-                self.last_write = (Instant::now(), Some(status));
-                Ok(())
-            }
-            Err(e) => {
-                self.last_write = (Instant::now(), None);
-                Err(e)
-            }
-        }
+        self.last_write = (Instant::now(), Some(status));
+        Ok(())
     }
 
     pub fn details(&self) -> SessionDetails {

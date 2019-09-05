@@ -50,6 +50,8 @@ enum HandshakeState {
     ReadingAuth,
     /// Waiting for ack packet
     ReadingAck,
+    /// Sending ack packet
+    SendingAck,
     /// Ready to start a session
     StartSession,
 }
@@ -111,8 +113,7 @@ impl Handshake {
     {
         self.originated = originated;
 
-        io.register_timer(self.connection.token(), HANDSHAKE_TIMEOUT)
-            .ok();
+        io.register_timer(self.connection.token(), HANDSHAKE_TIMEOUT)?;
 
         if originated {
             self.write_auth(io, host.secret(), host.id())?;
@@ -136,10 +137,13 @@ impl Handshake {
         while let Some(data) = self.connection.readable()? {
             match self.state {
                 HandshakeState::New => {
-                    error!("handshake readable invalid for New state");
+                    panic!("readable is invalid before handshake started");
                 }
                 HandshakeState::StartSession => {
-                    error!("handshake readable invalid for StartSession state");
+                    panic!("readable is invalid after handshake completed");
+                }
+                HandshakeState::SendingAck => {
+                    panic!("readable is invalid when sending ack");
                 }
                 HandshakeState::ReadingAuth => {
                     if data.len() == 64
@@ -156,7 +160,7 @@ impl Handshake {
             }
 
             if self.state == HandshakeState::StartSession {
-                io.clear_timer(self.connection.token()).ok();
+                self.clear_timer(io)?;
                 break;
             }
         }
@@ -166,12 +170,32 @@ impl Handshake {
         Ok(())
     }
 
+    fn clear_timer<Message>(
+        &self, io: &IoContext<Message>,
+    ) -> Result<(), Error>
+    where Message: Send + Clone + Sync + 'static {
+        let token = self.connection.token();
+        io.clear_timer(token)?;
+        io.update_registration(token)?;
+        Ok(())
+    }
+
     /// Writable IO handler.
     pub fn writable<Message>(
         &mut self, io: &IoContext<Message>,
     ) -> Result<WriteStatus, Error>
     where Message: Send + Clone + Sync + 'static {
-        self.connection.writable(io)
+        let result = self.connection.writable(io)?;
+
+        if result == WriteStatus::Complete
+            && self.state == HandshakeState::SendingAck
+            && !self.connection.is_sending()
+        {
+            self.state = HandshakeState::StartSession;
+            self.clear_timer(io)?;
+        }
+
+        Ok(result)
     }
 
     fn set_auth(
@@ -329,7 +353,7 @@ impl Handshake {
         let message = ecies::encrypt(&self.id, &[], &data)?;
         self.ack_cipher = message.clone();
         self.connection.send(io, message, SendQueuePriority::High)?;
-        self.state = HandshakeState::StartSession;
+        self.state = HandshakeState::SendingAck;
         Ok(())
     }
 }

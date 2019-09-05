@@ -167,7 +167,7 @@ pub struct GenericConnection<Socket: GenericSocket> {
     sending_packet: Option<Packet>,
     interest: Ready,
     registered: AtomicBool,
-    assembler: Box<dyn PacketAssembler>,
+    pub assembler: Box<dyn PacketAssembler>,
 }
 
 impl<Socket: GenericSocket> GenericConnection<Socket> {

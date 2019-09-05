@@ -1017,7 +1017,7 @@ impl NetworkServiceInner {
 
         if let Some(session) = self.sessions.get(stream) {
             let mut sess = session.write();
-            if let Err(e) = sess.writable(io) {
+            if let Err(e) = sess.writable(io, self) {
                 trace!("{}: Session write error: {:?}", stream, e);
             }
             if sess.done() {
