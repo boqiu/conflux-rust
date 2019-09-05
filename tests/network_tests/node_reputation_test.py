@@ -80,8 +80,8 @@ class NodeReputationTests(ConfluxTestFramework):
             assert self.compare_node_time(node[1]["lastContact"]["success"], n[1]["lastContact"]["success"]) == 1
 
         # Node 0 still create outgoing connection to Node 1
-        time.sleep((self.test_house_keeping_ms + 100) / 1000)
-        assert client0.get_peer(self.nodes[1].key) is not None
+        time.sleep(self.test_house_keeping_ms / 1000)
+        wait_until(lambda: client0.get_peer(self.nodes[1].key) is not None, timeout=3)
 
     def test_disconnect_with_demote(self, client0: RpcClient):
         n = self.connect_nodes(client0, 2)
@@ -96,7 +96,7 @@ class NodeReputationTests(ConfluxTestFramework):
         assert node[1]["streamToken"] == n[1]["streamToken"]
 
         # Node 0 will not create outgoing connection to Node 2
-        time.sleep((self.test_house_keeping_ms + 100) / 1000)
+        time.sleep((self.test_house_keeping_ms + 100) / 1000 + 1)
         assert client0.get_peer(self.nodes[2].key) is None
 
     def test_disconnect_with_remove(self, client0: RpcClient):
@@ -117,7 +117,7 @@ class NodeReputationTests(ConfluxTestFramework):
         assert node0[0] == "trusted"
 
         # Node 3 create more outgoing connection, but it's blacklisted in node 0.
-        time.sleep((self.test_house_keeping_ms + 100) / 1000)
+        time.sleep((self.test_house_keeping_ms + 100) / 1000 + 1)
         peer0 = client3.get_peer(self.nodes[0].key)
         # refused during handshake or not handshaked yet
         assert peer0 is None or len(peer0["caps"]) == 0

@@ -136,15 +136,9 @@ impl Handshake {
 
         while let Some(data) = self.connection.readable()? {
             match self.state {
-                HandshakeState::New => {
-                    panic!("readable is invalid before handshake started");
-                }
-                HandshakeState::StartSession => {
-                    panic!("readable is invalid after handshake completed");
-                }
-                HandshakeState::SendingAck => {
-                    panic!("readable is invalid when sending ack");
-                }
+                HandshakeState::New
+                | HandshakeState::StartSession
+                | HandshakeState::SendingAck => {}
                 HandshakeState::ReadingAuth => {
                     if data.len() == 64
                         && BYPASS_CRYPTOGRAPHY.load(Ordering::Relaxed)
