@@ -5,9 +5,12 @@
 use cfx_types::H256;
 use network::PeerId;
 //use slab::Slab;
-use crate::sync::{
-    message::{DynamicCapability, DynamicCapabilitySet},
-    random, Error, ErrorKind,
+use crate::{
+    message::MsgId,
+    sync::{
+        message::{DynamicCapability, DynamicCapabilitySet},
+        random, Error, ErrorKind,
+    },
 };
 use parking_lot::RwLock;
 use rand::prelude::SliceRandom;
@@ -16,6 +19,7 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
+use throttling::token_bucket::TokenBucketManager;
 
 pub struct SynchronizationPeerState {
     pub id: PeerId,
@@ -36,6 +40,15 @@ pub struct SynchronizationPeerState {
     pub capabilities: DynamicCapabilitySet,
     // latest notified capabilities of mine to the remote peer.
     pub notified_capabilities: DynamicCapabilitySet,
+
+    // Used to throttle the P2P messages from remote peer, so as to avoid DoS
+    // attack. E.g. send large number of P2P messages to query blocks.
+    pub throttling: TokenBucketManager,
+    // Used to track the throttled P2P messages to remote peer.
+    // The `Instant` value in `HashMap` is the time to allow send P2P message
+    // again. Otherwise, the remote peer will disconnect the TCP connection.
+    // todo (boqiu) apply for all get_random_peer_xxx functions
+    pub throttled_msgs: HashMap<MsgId, Instant>,
 }
 
 pub type SynchronizationPeers =

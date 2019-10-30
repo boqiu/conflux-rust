@@ -11,7 +11,11 @@ use crate::sync::{
 };
 use cfx_types::H256;
 use rlp_derive::{RlpDecodable, RlpEncodable};
-use std::{collections::HashSet, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Instant,
+};
+use throttling::token_bucket::TokenBucketManager;
 
 #[derive(Debug, PartialEq, RlpDecodable, RlpEncodable)]
 pub struct Status {
@@ -83,6 +87,10 @@ impl Handleable for Status {
                 heartbeat: Instant::now(),
                 capabilities: Default::default(),
                 notified_capabilities: Default::default(),
+                // todo (boqiu): load throttling configuration from file
+                // TokenBucketManager::load(ctx.manager.protocol_config.xxx)
+                throttling: TokenBucketManager::default(),
+                throttled_msgs: HashMap::new(),
             };
 
             peer_state

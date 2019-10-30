@@ -1716,10 +1716,10 @@ impl<'a> NetworkContextTrait for NetworkContext<'a> {
 
     fn disconnect_peer(
         &self, peer: PeerId, op: Option<UpdateNodeOperation>,
-        reason: Option<&'static str>,
+        reason: Option<String>,
     )
     {
-        let reason = reason.map(|r| DisconnectReason::Custom(r.into()));
+        let reason = reason.map(|r| DisconnectReason::Custom(r));
         self.network_service
             .kill_connection(peer, self.io, true, op, reason);
     }

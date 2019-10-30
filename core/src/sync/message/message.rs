@@ -6,6 +6,7 @@ use super::*;
 use crate::{
     message::{HasRequestId, Message, MsgId, RequestId},
     sync::{
+        message::throttling::{ThrottleMessage, ThrottleRequest},
         state::{
             SnapshotChunkRequest, SnapshotChunkResponse,
             SnapshotManifestRequest, SnapshotManifestResponse,
@@ -52,6 +53,8 @@ build_msgid! {
     GET_CHECKPOINT_BLAME_STATE_REQUEST = 0x1d
     GET_CHECKPOINT_BLAME_STATE_RESPONSE = 0x1e
 
+    THROTTLED = 0xfe
+
     INVALID = 0xff
 }
 
@@ -71,6 +74,7 @@ build_msg_impl! { GetCompactBlocksResponse, msgid::GET_CMPCT_BLOCKS_RESPONSE, "G
 build_msg_impl! { GetBlockTxn, msgid::GET_BLOCK_TXN, "GetBlockTxn" }
 build_msg_impl! { DynamicCapabilityChange, msgid::DYNAMIC_CAPABILITY_CHANGE, "DynamicCapabilityChange" }
 build_msg_impl! { GetBlockHashesByEpoch, msgid::GET_BLOCK_HASHES_BY_EPOCH, "GetBlockHashesByEpoch" }
+build_msg_impl! { Throttled, msgid::THROTTLED, "Throttled" }
 
 // normal priority and size-sensitive message types
 impl Message for Transactions {
@@ -164,75 +168,123 @@ pub fn handle_rlp_message(
     id: MsgId, ctx: &Context, rlp: &Rlp,
 ) -> Result<bool, Error> {
     match id {
-        msgid::STATUS => rlp.as_val::<Status>()?.handle(ctx)?,
-        msgid::NEW_BLOCK => rlp.as_val::<NewBlock>()?.handle(&ctx)?,
+        msgid::STATUS => rlp.as_val::<Status>()?.throttle(ctx)?.handle(ctx)?,
+        msgid::NEW_BLOCK => {
+            rlp.as_val::<NewBlock>()?.throttle(ctx)?.handle(ctx)?;
+        }
         msgid::NEW_BLOCK_HASHES => {
-            rlp.as_val::<NewBlockHashes>()?.handle(&ctx)?;
+            rlp.as_val::<NewBlockHashes>()?.throttle(ctx)?.handle(ctx)?;
         }
         msgid::GET_BLOCK_HEADERS => {
-            rlp.as_val::<GetBlockHeaders>()?.handle(ctx)?;
+            rlp.as_val::<GetBlockHeaders>()?
+                .throttle_request(ctx)?
+                .handle(ctx)?;
         }
         msgid::GET_BLOCK_HEADERS_RESPONSE => {
-            rlp.as_val::<GetBlockHeadersResponse>()?.handle(&ctx)?;
+            rlp.as_val::<GetBlockHeadersResponse>()?
+                .throttle(ctx)?
+                .handle(ctx)?;
         }
-        msgid::GET_BLOCKS => rlp.as_val::<GetBlocks>()?.handle(&ctx)?,
+        msgid::GET_BLOCKS => {
+            rlp.as_val::<GetBlocks>()?
+                .throttle_request(ctx)?
+                .handle(ctx)?;
+        }
         msgid::GET_BLOCKS_RESPONSE => {
-            rlp.as_val::<GetBlocksResponse>()?.handle(&ctx)?;
+            rlp.as_val::<GetBlocksResponse>()?
+                .throttle(ctx)?
+                .handle(ctx)?;
         }
         msgid::GET_BLOCKS_WITH_PUBLIC_RESPONSE => {
-            rlp.as_val::<GetBlocksWithPublicResponse>()?.handle(&ctx)?;
+            rlp.as_val::<GetBlocksWithPublicResponse>()?
+                .throttle(ctx)?
+                .handle(ctx)?;
         }
         msgid::GET_TERMINAL_BLOCK_HASHES => {
-            rlp.as_val::<GetTerminalBlockHashes>()?.handle(&ctx)?;
+            rlp.as_val::<GetTerminalBlockHashes>()?
+                .throttle(ctx)?
+                .handle(ctx)?;
         }
         msgid::GET_TERMINAL_BLOCK_HASHES_RESPONSE => {
             rlp.as_val::<GetTerminalBlockHashesResponse>()?
-                .handle(&ctx)?;
+                .throttle(ctx)?
+                .handle(ctx)?;
         }
         msgid::GET_CMPCT_BLOCKS => {
-            rlp.as_val::<GetCompactBlocks>()?.handle(&ctx)?;
+            rlp.as_val::<GetCompactBlocks>()?
+                .throttle_request(ctx)?
+                .handle(ctx)?;
         }
         msgid::GET_CMPCT_BLOCKS_RESPONSE => {
-            rlp.as_val::<GetCompactBlocksResponse>()?.handle(&ctx)?;
+            rlp.as_val::<GetCompactBlocksResponse>()?
+                .throttle(ctx)?
+                .handle(ctx)?;
         }
         msgid::GET_BLOCK_TXN => {
-            rlp.as_val::<GetBlockTxn>()?.handle(&ctx)?;
+            rlp.as_val::<GetBlockTxn>()?
+                .throttle_request(ctx)?
+                .handle(ctx)?;
         }
         msgid::GET_BLOCK_TXN_RESPONSE => {
-            rlp.as_val::<GetBlockTxnResponse>()?.handle(&ctx)?;
+            rlp.as_val::<GetBlockTxnResponse>()?
+                .throttle(ctx)?
+                .handle(ctx)?;
         }
         msgid::TRANSACTIONS => {
-            rlp.as_val::<Transactions>()?.handle(&ctx)?;
+            rlp.as_val::<Transactions>()?.throttle(ctx)?.handle(ctx)?;
         }
         msgid::DYNAMIC_CAPABILITY_CHANGE => {
-            rlp.as_val::<DynamicCapabilityChange>()?.handle(&ctx)?;
+            rlp.as_val::<DynamicCapabilityChange>()?
+                .throttle(ctx)?
+                .handle(ctx)?;
         }
         msgid::TRANSACTION_DIGESTS => {
-            rlp.as_val::<TransactionDigests>()?.handle(&ctx)?;
+            rlp.as_val::<TransactionDigests>()?
+                .throttle(ctx)?
+                .handle(ctx)?;
         }
         msgid::GET_TRANSACTIONS => {
-            rlp.as_val::<GetTransactions>()?.handle(&ctx)?;
+            rlp.as_val::<GetTransactions>()?
+                .throttle_request(ctx)?
+                .handle(ctx)?;
         }
         msgid::GET_TRANSACTIONS_RESPONSE => {
-            rlp.as_val::<GetTransactionsResponse>()?.handle(&ctx)?;
+            rlp.as_val::<GetTransactionsResponse>()?
+                .throttle(ctx)?
+                .handle(ctx)?;
         }
         msgid::GET_BLOCK_HASHES_BY_EPOCH => {
-            rlp.as_val::<GetBlockHashesByEpoch>()?.handle(&ctx)?;
+            rlp.as_val::<GetBlockHashesByEpoch>()?
+                .throttle_request(ctx)?
+                .handle(ctx)?;
         }
         msgid::GET_BLOCK_HASHES_RESPONSE => {
-            rlp.as_val::<GetBlockHashesResponse>()?.handle(&ctx)?;
+            rlp.as_val::<GetBlockHashesResponse>()?
+                .throttle(ctx)?
+                .handle(ctx)?;
         }
         msgid::GET_SNAPSHOT_MANIFEST => {
-            rlp.as_val::<SnapshotManifestRequest>()?.handle(&ctx)?;
+            rlp.as_val::<SnapshotManifestRequest>()?
+                .throttle_request(ctx)?
+                .handle(ctx)?;
         }
         msgid::GET_SNAPSHOT_MANIFEST_RESPONSE => {
-            rlp.as_val::<SnapshotManifestResponse>()?.handle(&ctx)?;
+            rlp.as_val::<SnapshotManifestResponse>()?
+                .throttle(ctx)?
+                .handle(ctx)?;
         }
         msgid::GET_SNAPSHOT_CHUNK => {
-            rlp.as_val::<SnapshotChunkRequest>()?.handle(&ctx)?;
+            rlp.as_val::<SnapshotChunkRequest>()?
+                .throttle_request(ctx)?
+                .handle(ctx)?;
         }
         msgid::GET_SNAPSHOT_CHUNK_RESPONSE => {
-            rlp.as_val::<SnapshotChunkResponse>()?.handle(&ctx)?;
+            rlp.as_val::<SnapshotChunkResponse>()?
+                .throttle(ctx)?
+                .handle(ctx)?;
+        }
+        msgid::THROTTLED => {
+            rlp.as_val::<Throttled>()?.throttle(ctx)?.handle(ctx)?;
         }
         _ => return Ok(false),
     }

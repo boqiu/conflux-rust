@@ -367,7 +367,7 @@ impl SynchronizationProtocolHandler {
             io.disconnect_peer(
                 peer,
                 Some(UpdateNodeOperation::Remove),
-                None, /* reason */
+                Some(format!("unknown sync protocol message id {:?}", msg_id)), /* reason */
             );
         }
 
@@ -384,6 +384,7 @@ impl SynchronizationProtocolHandler {
         );
 
         let mut disconnect = true;
+        let reason = format!("{:?}", e.0);
         let mut op = None;
 
         // NOTE, DO NOT USE WILDCARD IN THE FOLLOWING MATCH STATEMENT!
@@ -407,6 +408,17 @@ impl SynchronizationProtocolHandler {
             }
             ErrorKind::InvalidSnapshotChunk(_) => {
                 op = Some(UpdateNodeOperation::Demotion)
+            }
+            ErrorKind::AlreadyThrottled(_) => {
+                op = Some(UpdateNodeOperation::Remove)
+            }
+            ErrorKind::Throttled(_, msg) => {
+                disconnect = false;
+
+                if let Err(e) = send_message(io, peer, &msg) {
+                    error!("failed to send throttled packet: {:?}", e);
+                    disconnect = true;
+                }
             }
             ErrorKind::Decoder(_) => op = Some(UpdateNodeOperation::Remove),
             ErrorKind::Io(_) => disconnect = false,
@@ -445,7 +457,7 @@ impl SynchronizationProtocolHandler {
         }
 
         if disconnect {
-            io.disconnect_peer(peer, op, None /* reason */);
+            io.disconnect_peer(peer, op, Some(reason));
         }
     }
 
@@ -1378,7 +1390,7 @@ impl NetworkProtocolHandler for SynchronizationProtocolHandler {
             io.disconnect_peer(
                 peer,
                 Some(UpdateNodeOperation::Failure),
-                None, /* reason */
+                Some("send status failed".into()), /* reason */
             );
         } else {
             self.syn
@@ -1432,7 +1444,7 @@ impl NetworkProtocolHandler for SynchronizationProtocolHandler {
                     io.disconnect_peer(
                         peer,
                         Some(UpdateNodeOperation::Failure),
-                        None, /* reason */
+                        Some("sync heartbeat timeout".into()), /* reason */
                     );
                 }
             }
