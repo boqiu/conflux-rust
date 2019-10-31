@@ -21,6 +21,7 @@ use crate::{
         },
         state::{delta::CHECKPOINT_DUMP_MANAGER, SnapshotChunkSync},
         synchronization_phases::{SyncPhaseType, SynchronizationPhaseManager},
+        synchronization_state::PeerFilter,
     },
 };
 use cfx_types::H256;
@@ -497,7 +498,8 @@ impl SynchronizationProtocolHandler {
             to_request = missing_hashes.iter().cloned().collect::<Vec<H256>>();
             missing_hashes.clear();
         }
-        let chosen_peer = self.syn.get_random_peer(&HashSet::new());
+        let chosen_peer =
+            PeerFilter::new(msgid::GET_BLOCK_HEADERS).select(&self.syn);
         self.request_block_headers(
             io,
             chosen_peer,
@@ -584,9 +586,9 @@ impl SynchronizationProtocolHandler {
 
             // Epoch hashes are not in db, so should be requested from another
             // peer
-            let peer = self
-                .syn
-                .get_random_peer_satisfying(|peer| peer.best_epoch >= from);
+            let peer = PeerFilter::new(msgid::GET_BLOCK_HASHES_BY_EPOCH)
+                .with_min_best_epoch(from)
+                .select(&self.syn);
 
             // no peer has the epoch we need; try later
             if peer.is_none() {
@@ -756,9 +758,10 @@ impl SynchronizationProtocolHandler {
             }
         }
 
-        let mut failed_peers = HashSet::new();
-        failed_peers.insert(task.failed_peer);
-        let chosen_peer = self.syn.get_random_peer(&failed_peers);
+        let chosen_peer = PeerFilter::new(msgid::GET_BLOCKS)
+            .exclude(task.failed_peer)
+            .select(&self.syn);
+
         self.blocks_received(
             io,
             task.requested,
@@ -909,11 +912,13 @@ impl SynchronizationProtocolHandler {
         // min(sqrt(x)/x, throttle_ratio)
         let chosen_size = (num_peers.powf(-0.5).min(throttle_ratio) * num_peers)
             .round() as usize;
-        let mut peer_vec = self.syn.get_random_peers(
-            chosen_size.max(self.protocol_config.min_peers_propagation),
-        );
-        peer_vec.truncate(self.protocol_config.max_peers_propagation);
-        peer_vec
+
+        let num_peers = chosen_size
+            .max(self.protocol_config.min_peers_propagation)
+            .min(self.protocol_config.max_peers_propagation);
+
+        PeerFilter::new(msgid::TRANSACTION_DIGESTS)
+            .select_n(num_peers, &self.syn)
     }
 
     fn propagate_transactions_to_peers(
@@ -1061,7 +1066,9 @@ impl SynchronizationProtocolHandler {
             }
         }
 
-        let chosen_peer = self.syn.get_random_peer(&HashSet::new());
+        let chosen_peer = PeerFilter::new(msgid::GET_CMPCT_BLOCKS)
+            .throttle(msgid::GET_BLOCKS)
+            .select(&self.syn);
 
         // request missing blocks
         self.request_missing_blocks(
