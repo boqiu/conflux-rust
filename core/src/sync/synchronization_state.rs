@@ -47,7 +47,6 @@ pub struct SynchronizationPeerState {
     // Used to track the throttled P2P messages to remote peer.
     // The `Instant` value in `HashMap` is the time to allow send P2P message
     // again. Otherwise, the remote peer will disconnect the TCP connection.
-    // todo (boqiu) apply for all get_random_peer_xxx functions
     pub throttled_msgs: HashMap<MsgId, Instant>,
 }
 

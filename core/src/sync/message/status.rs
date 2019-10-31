@@ -77,6 +77,15 @@ impl Handleable for Status {
                 ctx.manager.graph.initial_missed_block_hashes.lock().drain(),
             );
 
+            let throttling =
+                match ctx.manager.protocol_config.throttling_config_file {
+                    Some(ref file) => {
+                        TokenBucketManager::load(file, Some("sync_protocol"))
+                            .expect("invalid throttling configuration file")
+                    }
+                    None => TokenBucketManager::default(),
+                };
+
             let mut peer_state = SynchronizationPeerState {
                 id: ctx.peer,
                 protocol_version: self.protocol_version,
@@ -87,9 +96,7 @@ impl Handleable for Status {
                 heartbeat: Instant::now(),
                 capabilities: Default::default(),
                 notified_capabilities: Default::default(),
-                // todo (boqiu): load throttling configuration from file
-                // TokenBucketManager::load(ctx.manager.protocol_config.xxx)
-                throttling: TokenBucketManager::default(),
+                throttling,
                 throttled_msgs: HashMap::new(),
             };
 

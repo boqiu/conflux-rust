@@ -6,6 +6,8 @@ use parking_lot::Mutex;
 use std::{
     cmp::min,
     collections::HashMap,
+    fs::read_to_string,
+    str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -97,6 +99,31 @@ impl TokenBucket {
     pub fn throttled(&self) -> Option<Instant> { self.throttled }
 }
 
+impl FromStr for TokenBucket {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        let fields: Vec<&str> = s.split(",").collect();
+
+        if fields.len() != 4 {
+            return Err(format!(
+                "invalid number of fields, expected = 4, actual = {}",
+                fields.len()
+            ));
+        }
+
+        let mut nums = Vec::new();
+
+        for f in fields {
+            let num = u64::from_str(f)
+                .map_err(|e| format!("failed to parse number: {:?}", e))?;
+            nums.push(num);
+        }
+
+        Ok(TokenBucket::new(nums[0], nums[1], nums[2], nums[3]))
+    }
+}
+
 #[derive(Default)]
 pub struct TokenBucketManager {
     // manage buckets by name
@@ -114,5 +141,42 @@ impl TokenBucketManager {
 
     pub fn get(&self, name: &String) -> Option<Arc<Mutex<TokenBucket>>> {
         self.buckets.get(name).cloned()
+    }
+
+    pub fn load(
+        toml_file: &String, section: Option<&str>,
+    ) -> Result<Self, String> {
+        let content = read_to_string(toml_file)
+            .map_err(|e| format!("failed to read toml file: {:?}", e))?;
+        let toml_val = content
+            .parse::<toml::Value>()
+            .map_err(|e| format!("failed to parse toml file: {:?}", e))?;
+
+        let val = match section {
+            Some(section) => match toml_val.get(section) {
+                Some(val) => val,
+                None => return Err(format!("section [{}] not found", section)),
+            },
+            None => &toml_val,
+        };
+        let table = val.as_table().expect("not table value");
+
+        let mut manager = TokenBucketManager::default();
+
+        for (k, v) in table.iter() {
+            let v = match v.as_str() {
+                Some(v) => v,
+                None => {
+                    return Err(format!(
+                        "invalid value type {:?}, string type required",
+                        v.type_str()
+                    ))
+                }
+            };
+
+            manager.register(k.into(), TokenBucket::from_str(v)?);
+        }
+
+        Ok(manager)
     }
 }

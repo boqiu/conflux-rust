@@ -253,6 +253,7 @@ pub struct ProtocolConfiguration {
     pub future_block_buffer_capacity: usize,
     pub max_download_state_peers: usize,
     pub test_mode: bool,
+    pub throttling_config_file: Option<String>,
 }
 
 impl SynchronizationProtocolHandler {

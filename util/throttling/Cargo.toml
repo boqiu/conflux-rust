@@ -5,3 +5,4 @@ edition = "2018"
 
 [dependencies]
 parking_lot = "0.8"
+toml = "0.4"
